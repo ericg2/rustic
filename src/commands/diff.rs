@@ -12,14 +12,10 @@ use std::{
     fmt::{Display, Write},
     path::{Path, PathBuf},
 };
-
+use std::io::Cursor;
 use anyhow::{Context, Result, bail};
-
-use rustic_core::{
-    Excludes, LocalDestination, LocalSource, LocalSourceFilterOptions, LocalSourceSaveOptions,
-    LsOptions, ProgressBars, ProgressType, ReadSource, ReadSourceEntry, RusticResult,
-    repofile::{Node, NodeType},
-};
+use rustic_backend::local::{LocalDestination, LocalSaveOptions, LocalSource};
+use rustic_core::{Excludes, FilterOptions, LsOptions, ProgressBars, ProgressType, ReadSource, ReadSourceBuilder, ReadSourceEntry, RusticResult, repofile::{Node, NodeType}, DestinationBuilder, Destination};
 
 #[cfg(feature = "tui")]
 use crate::commands::tui;
@@ -62,7 +58,7 @@ pub(crate) struct DiffCmd {
 
     /// Exclude options for local source
     #[clap(flatten, next_help_heading = "Exclude options for local source")]
-    ignore_opts: LocalSourceFilterOptions,
+    ignore_opts: FilterOptions,
 }
 
 impl Runnable for DiffCmd {
@@ -171,30 +167,29 @@ impl DiffCmd {
                 );
 
                 let node1 = repo.node_from_snapshot_and_path(&snap1, path1)?;
-                let local = LocalDestination::new(path2, false, !node1.is_dir())?;
+                let local = LocalDestination::new(path2).get_destination()?;
                 let path2 = PathBuf::from(path2);
                 let is_dir = path2
                     .metadata()
                     .with_context(|| format!("Error accessing {path2:?}"))?
                     .is_dir();
-                let src = LocalSource::new(
-                    LocalSourceSaveOptions::default(),
-                    &self.excludes,
-                    &self.ignore_opts,
-                    &[&path2],
-                )?
-                .entries()
-                .map(|item| -> RusticResult<_> {
-                    let ReadSourceEntry { path, node, .. } = item?;
-                    let path = if is_dir {
-                        // remove given path prefix for dirs as local path
-                        path.strip_prefix(&path2).unwrap().to_path_buf()
-                    } else {
-                        // ensure that we really get the filename if local path is a file
-                        path2.file_name().unwrap().into()
-                    };
-                    Ok((path, node))
-                });
+                let src = LocalSource::new(&path2)
+                    .excludes(self.excludes.clone())
+                    .filter_opts(self.ignore_opts.clone())
+                    .save_opts(LocalSaveOptions::default())
+                    .get_reader()?
+                    .entries()
+                    .map(|item| -> RusticResult<_> {
+                        let ReadSourceEntry { path, node, .. } = item?;
+                        let path = if is_dir {
+                            // remove given path prefix for dirs as local path
+                            path.strip_prefix(&path2).unwrap().to_path_buf()
+                        } else {
+                            // ensure that we really get the filename if local path is a file
+                            path2.file_name().unwrap().into()
+                        };
+                        Ok((path, node))
+                    });
 
                 if self.only_identical {
                     diff_identical(
@@ -266,21 +261,25 @@ pub fn arg_to_snap_path(arg: &str) -> (Option<&str>, Option<&str>) {
 ///
 /// [`RepositoryErrorKind::IdNotFound`]: rustic_core::error::RepositoryErrorKind::IdNotFound
 fn identical_content_local(
-    local: &LocalDestination,
+    local: &impl Destination,
     repo: &IndexedRepo,
     path: &Path,
     node: &Node,
 ) -> Result<bool> {
-    let Some(mut open_file) = local.get_matching_file(path, node.meta.size) else {
+    let meta = local.get_existing(path)?;
+    if meta.is_none_or(|x|x.size != node.meta.size) {
         return Ok(false);
-    };
+    }
 
+    let mut file_pos = 0;
     for id in node.content.iter().flatten() {
         let ie = repo.get_index_entry(id)?;
         let length: u64 = ie.data_length().into();
-        if !id.blob_matches_reader(length, &mut open_file) {
+        let mut data = Cursor::new(local.read_exact(path, file_pos, length)?);
+        if !id.blob_matches_reader(length, &mut data) {
             return Ok(false);
         }
+        file_pos += length;
     }
     Ok(true)
 }

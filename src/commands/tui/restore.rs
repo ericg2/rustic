@@ -1,7 +1,8 @@
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::prelude::*;
-use rustic_core::{LocalDestination, LsOptions, RestoreOptions, RestorePlan, repofile::Node};
+use rustic_backend::local::LocalDestination;
+use rustic_core::{LsOptions, RestoreOptions, RestorePlan, repofile::Node};
 
 use crate::{
     commands::tui::widgets::{
@@ -50,7 +51,7 @@ impl<'a> Restore<'a> {
             dest = ".".to_string();
         }
         self.dest = dest;
-        let dest = LocalDestination::new(&self.dest, true, !self.node.is_dir())?;
+        let dest = LocalDestination::new(&self.dest);
 
         // for restore, always recurse into tree
         let mut ls_opts = LsOptions::default();
@@ -68,7 +69,7 @@ impl<'a> Restore<'a> {
     // Note: This currently runs `prepare_restore` again and doesn't use `plan`
     // TODO: Fix when restore is changed such that `prepare_restore` is always dry_run and all modification is done in `restore`
     fn restore(&self, _plan: RestorePlan) -> Result<()> {
-        let dest = LocalDestination::new(&self.dest, true, !self.node.is_dir())?;
+        let dest = LocalDestination::new(&self.dest);
 
         // for restore, always recurse into tree
         let mut ls_opts = LsOptions::default();

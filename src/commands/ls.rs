@@ -15,9 +15,10 @@ use abscissa_core::{Command, Runnable, Shutdown};
 use anyhow::Result;
 
 use derive_more::Add;
+use rustic_backend::local::{LocalSaveOptions, LocalSource};
 use rustic_core::{
-    Excludes, LocalSource, LocalSourceFilterOptions, LocalSourceSaveOptions, LsOptions,
-    ProgressType, ReadSource, ReadSourceEntry, RusticResult,
+    Excludes, FilterOptions, LsOptions, ProgressType, ReadSource, ReadSourceBuilder,
+    ReadSourceEntry, RusticResult,
     repofile::{Node, NodeType},
 };
 
@@ -76,7 +77,7 @@ pub(crate) struct LsCmd {
     pub excludes: Excludes,
 
     #[clap(flatten, next_help_heading = "Exclude options for local source")]
-    pub ignore_opts: LocalSourceFilterOptions,
+    pub ignore_opts: FilterOptions,
 }
 
 impl Runnable for LsCmd {
@@ -218,17 +219,16 @@ impl LsCmd {
             anyhow::bail!("interactive ls with local path is not yet implemented!");
         }
         let path = path.unwrap_or(".");
-        let src = LocalSource::new(
-            LocalSourceSaveOptions::default(),
-            &self.excludes,
-            &self.ignore_opts,
-            &[&path],
-        )?
-        .entries()
-        .map(|item| -> RusticResult<_> {
-            let ReadSourceEntry { path, node, .. } = item?;
-            Ok((path, node))
-        });
+        let src = LocalSource::new(path)
+            .excludes(self.excludes.clone())
+            .filter_opts(self.ignore_opts.clone())
+            .save_opts(LocalSaveOptions::default())
+            .get_reader()?
+            .entries()
+            .map(|item| -> RusticResult<_> {
+                let ReadSourceEntry { path, node, .. } = item?;
+                Ok((path, node))
+            });
         self.display(src)?;
         Ok(())
     }

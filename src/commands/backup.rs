@@ -21,15 +21,21 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::ValueHint;
 use comfy_table::Cell;
 use conflate::{Merge, MergeFrom};
+use derive_setters::Setters;
 use log::{debug, error, info, warn};
-use rustic_backend::OpenDALBackend;
-use rustic_core::{ChildStdoutSource, Excludes, LocalSource, ReadSource, StdinSource, StringList};
+use rustic_backend::local::{LocalSaveOptions, LocalSource};
+use rustic_backend::opendal::{OpenDALConfig, OpenDALSource};
+use rustic_backend::stdin::StdinSource;
+use rustic_backend::stdout::CommandSource;
+use rustic_core::{
+    BackupOptions, Excludes, FilterOptions, ReadSource, ReadSourceBuilder, RepositoryConfig,
+    StringList,
+};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use rustic_core::{
-    BackupOptions, CommandInput, ConfigOptions, KeyOptions, LocalSourceFilterOptions,
-    LocalSourceSaveOptions, ParentOptions, PathList, SnapshotOptions,
+    CommandInput, ConfigOptions, KeyOptions, ParentOptions, PathList, SnapshotOptions,
     repofile::{SnapshotFile, SnapshotId},
 };
 
@@ -105,7 +111,7 @@ pub struct BackupCmd {
     /// Node save options
     #[clap(flatten, next_help_heading = "Node modification options")]
     #[serde(flatten)]
-    ignore_save_opts: LocalSourceSaveOptions,
+    ignore_save_opts: LocalSaveOptions,
 
     /// Parent processing options
     #[clap(flatten, next_help_heading = "Options for parent processing")]
@@ -120,7 +126,7 @@ pub struct BackupCmd {
     /// Exclude options for local source
     #[clap(flatten, next_help_heading = "Exclude options for local source")]
     #[serde(flatten)]
-    ignore_filter_opts: LocalSourceFilterOptions,
+    ignore_filter_opts: FilterOptions,
 
     /// Snapshot options
     #[clap(flatten, next_help_heading = "Snapshot options")]
@@ -167,6 +173,54 @@ pub struct BackupCmd {
     #[clap(long, value_name = "NAME=VALUE", value_parser = parse_labels, default_value = "")]
     #[merge(strategy=conflate::btreemap::append_or_ignore)]
     metrics_labels: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Default, Debug, Deserialize, Serialize, Setters)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+#[setters(into)]
+#[non_exhaustive]
+/// Options for the `backup` command.
+pub struct BackupSourceOptions {
+    /// Set filename to be used when backing up from stdin
+    pub stdin_filename: String,
+
+    /// Call the given command and use its output as stdin
+    pub stdin_command: Option<CommandInput>,
+
+    /// Manually set backup path in snapshot
+    pub as_path: Option<PathBuf>,
+
+    /// Don't scan the backup source for its size - this disables ETA estimation for backup.
+    pub no_scan: bool,
+
+    /// Dry-run mode: Don't write any data or snapshot
+    pub dry_run: bool,
+
+    #[serde(flatten)]
+    /// Options how to use a parent snapshot
+    pub parent_opts: ParentOptions,
+
+    #[serde(flatten)]
+    /// Options how to save entries from a local source
+    pub ignore_save_opts: LocalSaveOptions,
+
+    #[serde(flatten)]
+    /// excludes
+    pub excludes: Excludes,
+
+    #[serde(flatten)]
+    /// Options how to filter from a local source
+    pub ignore_filter_opts: FilterOptions,
+}
+
+impl From<BackupSourceOptions> for BackupOptions {
+    fn from(value: BackupSourceOptions) -> Self {
+        Self::default()
+            .as_path(value.as_path)
+            .parent_opts(value.parent_opts)
+            .no_scan(value.no_scan)
+            .dry_run(value.dry_run)
+    }
 }
 
 impl BackupCmd {
@@ -344,7 +398,7 @@ impl BackupCmd {
         source: &PathList,
         options: BTreeMap<String, String>,
         ls: bool,
-        backup_opts: BackupOptions,
+        backup_opts: BackupSourceOptions,
         snap: &mut SnapshotFile,
         repo: &IndexedIdsRepo,
     ) -> Result<()> {
@@ -359,29 +413,26 @@ impl BackupCmd {
                 // TODO: This check should not be done on PathList, but in the sources list directly
                 && let Some(path) = source[0].to_string_lossy().strip_prefix("opendal:")
         {
-            let source = OpenDALBackend::new(path, options)?.as_source()?;
-            Self::archive(repo, &backup_opts, ls, &source, snap, &[PathBuf::new()])?;
+            let config = OpenDALConfig::from_iter(path, options);
+            let source = OpenDALSource::new(&config, source);
+            Self::archive(repo, &(backup_opts.into()), ls, &source, snap)?;
         } else if source == backup_stdin {
             let path = PathBuf::from(&backup_opts.stdin_filename);
-            let backup_paths = vec![path.clone()];
             if let Some(command) = &backup_opts.stdin_command {
-                let src = ChildStdoutSource::new(command, path)?;
-                Self::archive(repo, &backup_opts, ls, &src, snap, &backup_paths)?;
-                src.finish()?;
+                let src = CommandSource::new(command, path);
+                Self::archive(repo, &(backup_opts.into()), ls, &src, snap)?;
             } else {
                 let src = StdinSource::new(path);
-                Self::archive(repo, &backup_opts, ls, &src, snap, &backup_paths)?;
+                Self::archive(repo, &(backup_opts.into()), ls, &src, snap)?;
             }
         } else {
-            let backup_path = source.paths();
-            let src = LocalSource::new(
-                backup_opts.ignore_save_opts,
-                &backup_opts.excludes,
-                &backup_opts.ignore_filter_opts,
-                &backup_path,
-            )?;
-            Self::archive(repo, &backup_opts, ls, &src, snap, &backup_path)?;
-        };
+            let src = LocalSource::new(&source)
+                .save_opts(backup_opts.ignore_save_opts.clone())
+                .excludes(backup_opts.excludes.clone())
+                .filter_opts(backup_opts.ignore_filter_opts.clone());
+
+            Self::archive(repo, &(backup_opts.into()), ls, &src, snap)?;
+        }
         Ok(())
     }
 
@@ -391,22 +442,21 @@ impl BackupCmd {
         ls: bool,
         src: &R,
         snap: &mut SnapshotFile,
-        backup_paths: &[PathBuf],
     ) -> Result<()>
     where
-        R: ReadSource + 'static,
-        <R as ReadSource>::Open: Send,
-        <R as ReadSource>::Iter: Send,
+        R: ReadSourceBuilder + 'static,
+        <<R as ReadSourceBuilder>::Reader as ReadSource>::Iter: Send,
+        <<R as ReadSourceBuilder>::Reader as ReadSource>::Open: Send,
     {
         if ls {
             let lister = LsCmd {
                 long: true,
                 ..Default::default()
             };
-            lister.display(src.entries().map(|e| Ok(e?.as_tree_entry())))?;
+            lister.display(src.get_reader()?.entries().map(|e| Ok(e?.as_tree_entry())))?;
         } else {
             let snapshot = std::mem::take(snap);
-            let snapshot = repo.archive(opts, src, snapshot, backup_paths)?;
+            let snapshot = repo.backup(opts, src, snapshot)?;
             *snap = snapshot;
         }
         Ok(())
@@ -443,7 +493,7 @@ impl BackupCmd {
         let mut parent_opts = self.parent_opts;
         parent_opts.group_by = parent_opts.group_by.or(config.global.group_by);
 
-        let backup_opts = BackupOptions::default()
+        let backup_opts = BackupSourceOptions::default()
             .stdin_filename(self.stdin_filename)
             .stdin_command(self.stdin_command)
             .as_path(self.as_path)

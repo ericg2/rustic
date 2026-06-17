@@ -7,8 +7,8 @@ use crate::{
 use abscissa_core::{Command, Runnable, Shutdown};
 use anyhow::Result;
 use log::{debug, info};
-
-use rustic_core::{LocalDestination, LsOptions, RestoreOptions};
+use rustic_backend::local::LocalDestination;
+use rustic_core::{LsOptions, RestoreOptions};
 
 use crate::filtering::SnapshotFilter;
 
@@ -67,7 +67,7 @@ impl RestoreCmd {
         ls_opts.recursive = true;
         let ls = repo.ls(&node, &ls_opts)?;
 
-        let dest = LocalDestination::new(&self.dest, true, !node.is_dir())?;
+        let dest = LocalDestination::new(&self.dest);
 
         let restore_infos = repo.prepare_restore(&self.opts, ls, &dest, dry_run)?;
 

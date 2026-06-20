@@ -12,7 +12,6 @@ use std::{
     fmt::{Display, Write},
     path::{Path, PathBuf},
 };
-use std::io::Cursor;
 use anyhow::{Context, Result, bail};
 use rustic_backend::local::{LocalDestination, LocalSaveOptions, LocalSource};
 use rustic_core::{Excludes, FilterOptions, LsOptions, ProgressBars, ProgressType, ReadSource, ReadSourceBuilder, ReadSourceEntry, RusticResult, repofile::{Node, NodeType}, DestinationBuilder, Destination, ReadFileOpen};

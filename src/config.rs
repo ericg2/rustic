@@ -40,6 +40,7 @@ use crate::{
     filtering::SnapshotFilter,
     repository::AllRepositoryOptions,
 };
+use crate::commands::restore::RestoreCmd;
 
 /// Rustic Configuration
 ///
@@ -65,6 +66,10 @@ pub struct RusticConfig {
     /// Backup options
     #[clap(skip)]
     pub backup: BackupCmd,
+
+    /// Restore options
+    #[clap(skip)]
+    pub restore: RestoreCmd,
 
     /// Copy options
     #[clap(skip)]

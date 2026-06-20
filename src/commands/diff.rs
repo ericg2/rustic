@@ -15,7 +15,7 @@ use std::{
 use std::io::Cursor;
 use anyhow::{Context, Result, bail};
 use rustic_backend::local::{LocalDestination, LocalSaveOptions, LocalSource};
-use rustic_core::{Excludes, FilterOptions, LsOptions, ProgressBars, ProgressType, ReadSource, ReadSourceBuilder, ReadSourceEntry, RusticResult, repofile::{Node, NodeType}, DestinationBuilder, Destination};
+use rustic_core::{Excludes, FilterOptions, LsOptions, ProgressBars, ProgressType, ReadSource, ReadSourceBuilder, ReadSourceEntry, RusticResult, repofile::{Node, NodeType}, DestinationBuilder, Destination, ReadFileOpen};
 
 #[cfg(feature = "tui")]
 use crate::commands::tui;
@@ -271,15 +271,13 @@ fn identical_content_local(
         return Ok(false);
     }
 
-    let mut file_pos = 0;
+    let mut open_file = local.get_reader(path)?.open()?;
     for id in node.content.iter().flatten() {
         let ie = repo.get_index_entry(id)?;
         let length: u64 = ie.data_length().into();
-        let mut data = Cursor::new(local.read_exact(path, file_pos, length)?);
-        if !id.blob_matches_reader(length, &mut data) {
+        if !id.blob_matches_reader(length, &mut open_file) {
             return Ok(false);
         }
-        file_pos += length;
     }
     Ok(true)
 }

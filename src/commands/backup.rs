@@ -28,7 +28,7 @@ use rustic_backend::opendal::{OpenDALConfig, OpenDALSource};
 use rustic_backend::stdin::StdinSource;
 use rustic_backend::stdout::CommandSource;
 use rustic_core::{
-    BackupOptions, Excludes, FilterOptions, ReadSource, ReadSourceBuilder, RepositoryConfig,
+    BackupOptions, Excludes, FilterOptions, ReadSource, ReadSourceBuilder,
     StringList,
 };
 use serde::{Deserialize, Serialize};
@@ -411,9 +411,9 @@ impl BackupCmd {
 
         if source.len() == 1
                 // TODO: This check should not be done on PathList, but in the sources list directly
-                && let Some(path) = source[0].to_string_lossy().strip_prefix("opendal:")
+                && let Some(scheme) = source[0].to_string_lossy().strip_prefix("opendal:")
         {
-            let config = OpenDALConfig::from_iter(path, options);
+            let config = OpenDALConfig::from_iter(scheme, options);
             let source = OpenDALSource::new(&config, source);
             Self::archive(repo, &(backup_opts.into()), ls, &source, snap)?;
         } else if source == backup_stdin {

@@ -4,6 +4,8 @@ use ratatui::prelude::*;
 use rustic_backend::local::LocalDestination;
 use rustic_core::{LsOptions, RestoreOptions, RestorePlan, repofile::Node};
 
+use super::widgets::popup_text;
+//use crate::helpers::up_level;
 use crate::{
     commands::tui::widgets::{
         Draw, PopUpInput, PopUpPrompt, PopUpText, ProcessEvent, PromptResult, TextInputResult,
@@ -12,8 +14,6 @@ use crate::{
     helpers::bytes_size_to_string,
     repository::IndexedRepo,
 };
-
-use super::widgets::popup_text;
 
 // the states this screen can be in
 enum CurrentScreen {
@@ -47,9 +47,13 @@ impl<'a> Restore<'a> {
     }
 
     pub fn compute_plan(&mut self, mut dest: String, dry_run: bool) -> Result<RestorePlan> {
+        // if self.node.is_file() {
+        //     dest = up_level(dest);
+        // }
         if dest.is_empty() {
             dest = ".".to_string();
         }
+
         self.dest = dest;
         let dest = LocalDestination::new(&self.dest);
 

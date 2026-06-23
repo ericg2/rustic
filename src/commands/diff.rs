@@ -7,14 +7,18 @@ use clap::ValueHint;
 use itertools::{EitherOrBoth, Itertools};
 use log::{debug, info};
 
+use anyhow::{Context, Result, bail};
+use rustic_backend::local::{LocalDestination, LocalSaveOptions, LocalSource};
+use rustic_core::{
+    Destination, DestinationBuilder, Excludes, FilterOptions, LsOptions, ProgressBars,
+    ProgressType, ReadFileOpen, ReadSource, ReadSourceBuilder, ReadSourceEntry, RusticResult,
+    repofile::{Node, NodeType},
+};
 use std::{
     cmp::Ordering,
     fmt::{Display, Write},
     path::{Path, PathBuf},
 };
-use anyhow::{Context, Result, bail};
-use rustic_backend::local::{LocalDestination, LocalSaveOptions, LocalSource};
-use rustic_core::{Excludes, FilterOptions, LsOptions, ProgressBars, ProgressType, ReadSource, ReadSourceBuilder, ReadSourceEntry, RusticResult, repofile::{Node, NodeType}, DestinationBuilder, Destination, ReadFileOpen};
 
 #[cfg(feature = "tui")]
 use crate::commands::tui;
@@ -182,7 +186,8 @@ impl DiffCmd {
                         let ReadSourceEntry { path, node, .. } = item?;
                         let path = if is_dir {
                             // remove given path prefix for dirs as local path
-                            path.strip_prefix(&path2).unwrap().to_path_buf()
+                            let p = path.strip_prefix(&path2).unwrap_or(&path);
+                            p.strip_prefix("/").unwrap_or(p).to_path_buf()
                         } else {
                             // ensure that we really get the filename if local path is a file
                             path2.file_name().unwrap().into()
@@ -266,7 +271,7 @@ fn identical_content_local(
     node: &Node,
 ) -> Result<bool> {
     let meta = local.get_existing(path)?;
-    if meta.is_none_or(|x|x.size != node.meta.size) {
+    if meta.is_none_or(|x| x.size != node.meta.size) {
         return Ok(false);
     }
 

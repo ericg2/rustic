@@ -173,6 +173,10 @@ fn version() -> &'static str {
     option_env!("PROJECT_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
 }
 
+pub(crate) fn program_version() -> String {
+    format!("rustic {}", version())
+}
+
 /// Entry point for the application. It needs to be a struct to allow using subcommands!
 #[derive(clap::Parser, Command, Debug)]
 #[command(author, about, name="rustic", styles=styles(), version=version())]
@@ -224,6 +228,12 @@ impl Configurable<RusticConfig> for EntryPoint {
         // rustic logic and merged with the CLI options.
         // That's why it says `_config`, because it's not read at all and therefore not needed.
         let mut config = self.config.clone();
+
+        // Completion generation only needs the command definition. In particular, it must not
+        // try to read a profile which may be inaccessible to the user generating completions.
+        if matches!(self.commands, RusticCmd::Completions(_)) {
+            return Ok(config);
+        }
 
         // collect "RUSTIC_REPO_OPT*" and "OPENDAL*" env variables.
         // also add the standardized OTEL variables manually

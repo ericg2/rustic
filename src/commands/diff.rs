@@ -9,7 +9,11 @@ use log::{debug, info};
 
 use anyhow::{Context, Result, bail};
 use rustic_backend::local::LocalSource;
-use rustic_core::{repofile::{Node, NodeType}, Excludes, FilterOptions, ListAdapter, LsOptions, ProgressBars, ProgressType, ReadSource, RusticResult, ListOptions, RusticError, ErrorKind};
+use rustic_core::{
+    ErrorKind, Excludes, FilterOptions, ListAdapter, ListOptions, LsOptions, ProgressBars,
+    ProgressType, ReadSource, RusticError, RusticResult,
+    repofile::{Node, NodeType},
+};
 use std::{
     cmp::Ordering,
     fmt::{Display, Write},
@@ -172,21 +176,27 @@ impl DiffCmd {
                     .with_context(|| format!("Error accessing {path2:?}"))?
                     .is_dir();
                 let src = LocalSource::new(&path2);
-                let iter = ListAdapter::with_options(&src, "/", ListOptions::default().excludes(self.excludes.clone()).filters(self.ignore_opts.clone()))?
-                    .map(|item| -> RusticResult<_> {
-                        let item = item.map_err(|err| {
-                            RusticError::with_source(ErrorKind::Backend, "Failed to read file", err)
-                        })?;
-                        let path = if is_dir {
-                            // remove given path prefix for dirs as local path
-                            let p = item.path().strip_prefix(&path2).unwrap_or(&item.path());
-                            p.strip_prefix("/").unwrap_or(p).to_path_buf()
-                        } else {
-                            // ensure that we really get the filename if local path is a file
-                            path2.file_name().unwrap().into()
-                        };
-                        Ok((path, item.node()))
-                    });
+                let iter = ListAdapter::with_options(
+                    &src,
+                    "/",
+                    ListOptions::default()
+                        .excludes(self.excludes.clone())
+                        .filters(self.ignore_opts.clone()),
+                )?
+                .map(|item| -> RusticResult<_> {
+                    let item = item.map_err(|err| {
+                        RusticError::with_source(ErrorKind::Backend, "Failed to read file", err)
+                    })?;
+                    let path = if is_dir {
+                        // remove given path prefix for dirs as local path
+                        let p = item.path().strip_prefix(&path2).unwrap_or(&item.path());
+                        p.strip_prefix("/").unwrap_or(p).to_path_buf()
+                    } else {
+                        // ensure that we really get the filename if local path is a file
+                        path2.file_name().unwrap().into()
+                    };
+                    Ok((path, item.node()))
+                });
 
                 if self.only_identical {
                     diff_identical(
@@ -526,7 +536,9 @@ fn diff(
         let mut diff = NodeDiff::try_from(node1.as_ref(), node2.as_ref(), |n1, n2| {
             Ok(match n1.node_type {
                 NodeType::File => no_content || file_identical(&path, n1, n2)?,
-                NodeType::Dir => true,
+                // Directories have no content to compare. The target of symlinks is compared by
+                // `NodeDiff::try_from` before this closure is called.
+                NodeType::Dir | NodeType::Symlink { .. } => true,
                 _ => false,
             })
         })?;

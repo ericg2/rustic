@@ -30,7 +30,7 @@ Windows).
 The `restic` project is older and more mature than `rustic`, slow with new
 developments and conservative with changes. `rustic` was created by a heavy
 restic contributor who was at some point annoyed about that slow speed. So,
-`rustic` is of course very much inspired by `rustic` but is a complete new
+`rustic` is of course very much inspired by `restic` but is a complete new
 implementation aiming to be the better `restic` with respect to features and
 development speed.
 
@@ -162,7 +162,7 @@ Please make sure, that you read the
 
 ## Minimum Rust version policy
 
-This crate's minimum supported `rustc` version is `1.88.0`.
+This crate's minimum supported `rustc` version is `1.91.0`.
 
 The current policy is that the minimum Rust version required to use this crate
 can be increased in minor version updates. For example, if `crate 1.0` requires

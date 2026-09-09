@@ -8,12 +8,8 @@ use itertools::{EitherOrBoth, Itertools};
 use log::{debug, info};
 
 use anyhow::{Context, Result, bail};
-use rustic_backend::local::{LocalDestination, LocalSaveOptions, LocalSource};
-use rustic_core::{
-    Destination, DestinationBuilder, Excludes, FilterOptions, LsOptions, ProgressBars,
-    ProgressType, ReadFileOpen, ReadSource, ReadSourceBuilder, ReadSourceEntry, RusticResult,
-    repofile::{Node, NodeType},
-};
+use rustic_backend::local::LocalSource;
+use rustic_core::{repofile::{Node, NodeType}, Excludes, FilterOptions, ListAdapter, LsOptions, ProgressBars, ProgressType, ReadSource, RusticResult, ListOptions, RusticError, ErrorKind};
 use std::{
     cmp::Ordering,
     fmt::{Display, Write},
@@ -170,43 +166,40 @@ impl DiffCmd {
                 );
 
                 let node1 = repo.node_from_snapshot_and_path(&snap1, path1)?;
-                let local = LocalDestination::new(path2).get_destination()?;
                 let path2 = PathBuf::from(path2);
                 let is_dir = path2
                     .metadata()
                     .with_context(|| format!("Error accessing {path2:?}"))?
                     .is_dir();
-                let src = LocalSource::new(&path2)
-                    .excludes(self.excludes.clone())
-                    .filter_opts(self.ignore_opts.clone())
-                    .save_opts(LocalSaveOptions::default())
-                    .get_reader()?
-                    .entries()
+                let src = LocalSource::new(&path2);
+                let iter = ListAdapter::with_options(&src, "/", ListOptions::default().excludes(self.excludes.clone()).filters(self.ignore_opts.clone()))?
                     .map(|item| -> RusticResult<_> {
-                        let ReadSourceEntry { path, node, .. } = item?;
+                        let item = item.map_err(|err| {
+                            RusticError::with_source(ErrorKind::Backend, "Failed to read file", err)
+                        })?;
                         let path = if is_dir {
                             // remove given path prefix for dirs as local path
-                            let p = path.strip_prefix(&path2).unwrap_or(&path);
+                            let p = item.path().strip_prefix(&path2).unwrap_or(&item.path());
                             p.strip_prefix("/").unwrap_or(p).to_path_buf()
                         } else {
                             // ensure that we really get the filename if local path is a file
                             path2.file_name().unwrap().into()
                         };
-                        Ok((path, node))
+                        Ok((path, item.node()))
                     });
 
                 if self.only_identical {
                     diff_identical(
                         repo.ls(&node1, &LsOptions::default())?,
-                        src,
-                        |path, node1, _node2| identical_content_local(&local, &repo, path, node1),
+                        iter,
+                        |path, node1, _node2| identical_content_local(&src, &repo, path, node1),
                     )?;
                 } else {
                     diff(
                         repo.ls(&node1, &LsOptions::default())?,
-                        src,
+                        iter,
                         self.no_content,
-                        |path, node1, _node2| identical_content_local(&local, &repo, path, node1),
+                        |path, node1, _node2| identical_content_local(&src, &repo, path, node1),
                         self.metadata,
                     )?;
                 }
@@ -265,17 +258,17 @@ pub fn arg_to_snap_path(arg: &str) -> (Option<&str>, Option<&str>) {
 ///
 /// [`RepositoryErrorKind::IdNotFound`]: rustic_core::error::RepositoryErrorKind::IdNotFound
 fn identical_content_local(
-    local: &impl Destination,
+    local: &impl ReadSource,
     repo: &IndexedRepo,
     path: &Path,
     node: &Node,
 ) -> Result<bool> {
-    let meta = local.get_existing(path)?;
+    let meta = local.stat(path)?;
     if meta.is_none_or(|x| x.size != node.meta.size) {
         return Ok(false);
     }
 
-    let mut open_file = local.get_reader(path)?.open()?;
+    let mut open_file = local.open_read(path)?;
     for id in node.content.iter().flatten() {
         let ie = repo.get_index_entry(id)?;
         let length: u64 = ie.data_length().into();

@@ -8,12 +8,12 @@ use std::path::Path;
 
 use crate::filtering::SnapshotFilter;
 use abscissa_core::{Command, Runnable, Shutdown};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use conflate::Merge;
 use log::{debug, info};
-use rustic_backend::local::LocalDestination;
-use rustic_backend::opendal::{OpenDALConfig, OpenDALDestination};
-use rustic_core::{DestinationBuilder, LsOptions, RestoreOptions};
+use rustic_backend::local::LocalSource;
+use rustic_backend::opendal::{OpenDALConfig, OpenDALSource};
+use rustic_core::{BackendConfig, CancelToken, LsOptions, RestoreOptions, WriteSource};
 use serde::{Deserialize, Serialize};
 //use crate::helpers::up_level;
 
@@ -75,7 +75,7 @@ impl Runnable for RestoreCmd {
 }
 
 impl RestoreCmd {
-    fn restore(&self, repo: IndexedRepo, dest: impl DestinationBuilder) -> Result<()> {
+    fn restore(&self, repo: IndexedRepo, dest: impl WriteSource) -> Result<()> {
         let config = RUSTIC_APP.config();
         let dry_run = config.global.dry_run;
 
@@ -86,7 +86,8 @@ impl RestoreCmd {
         let mut ls_opts = self.ls_opts.clone();
         ls_opts.recursive = true;
         let ls = repo.ls(&node, &ls_opts)?;
-        let restore_infos = repo.prepare_restore(&self.opts, ls, &dest, dry_run)?;
+        let restore_infos =
+            repo.prepare_restore(&self.opts, ls, &dest, "/", dry_run, CancelToken::new())?;
 
         let fs = restore_infos.stats.files;
         println!(
@@ -120,7 +121,7 @@ impl RestoreCmd {
             let repo = repo.drop_data_from_index();
 
             let ls = repo.ls(&node, &ls_opts)?;
-            repo.restore(restore_infos, &self.opts, ls, &dest)?;
+            repo.restore(restore_infos, &self.opts, ls, &dest, CancelToken::new())?;
             println!("restore done.");
         } else {
             debug!(
@@ -136,13 +137,16 @@ impl RestoreCmd {
         let config = RUSTIC_APP.config();
         self.merge(config.restore.clone());
 
-        let dest = self.dest.clone().ok_or_else(|| anyhow!("A valid destination is required."))?;
+        let dest = self
+            .dest
+            .clone()
+            .ok_or_else(|| anyhow!("A valid destination is required."))?;
         if let Some(scheme) = dest.strip_prefix("opendal:") {
             let config = OpenDALConfig::from_iter(scheme, self.options.clone());
-            let dest = OpenDALDestination::new(Path::new("/"), &config);
+            let dest = OpenDALSource::from_config(&config)?;
             self.restore(repo, dest)
         } else {
-            let dest = LocalDestination::new(&dest);
+            let dest = LocalSource::new(&dest);
             self.restore(repo, dest)
         }
     }

@@ -1,8 +1,8 @@
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::prelude::*;
-use rustic_backend::local::LocalDestination;
-use rustic_core::{LsOptions, RestoreOptions, RestorePlan, repofile::Node};
+use rustic_backend::local::LocalSource;
+use rustic_core::{CancelToken, LsOptions, RestoreOptions, RestorePlan, repofile::Node};
 
 use super::widgets::popup_text;
 //use crate::helpers::up_level;
@@ -55,7 +55,7 @@ impl<'a> Restore<'a> {
         }
 
         self.dest = dest;
-        let dest = LocalDestination::new(&self.dest);
+        let dest = LocalSource::new(&self.dest);
 
         // for restore, always recurse into tree
         let mut ls_opts = LsOptions::default();
@@ -63,7 +63,9 @@ impl<'a> Restore<'a> {
 
         let ls = self.repo.ls(&self.node, &ls_opts)?;
 
-        let plan = self.repo.prepare_restore(&self.opts, ls, &dest, dry_run)?;
+        let plan =
+            self.repo
+                .prepare_restore(&self.opts, ls, &dest, "/", dry_run, CancelToken::new())?;
 
         Ok(plan)
     }
@@ -73,19 +75,25 @@ impl<'a> Restore<'a> {
     // Note: This currently runs `prepare_restore` again and doesn't use `plan`
     // TODO: Fix when restore is changed such that `prepare_restore` is always dry_run and all modification is done in `restore`
     fn restore(&self, _plan: RestorePlan) -> Result<()> {
-        let dest = LocalDestination::new(&self.dest);
+        let dest = LocalSource::new(&self.dest);
 
         // for restore, always recurse into tree
         let mut ls_opts = LsOptions::default();
         ls_opts.recursive = true;
 
         let ls = self.repo.ls(&self.node, &ls_opts)?;
-        let plan = self
-            .repo
-            .prepare_restore(&self.opts, ls.clone(), &dest, false)?;
+        let plan = self.repo.prepare_restore(
+            &self.opts,
+            ls.clone(),
+            &dest,
+            "/",
+            false,
+            CancelToken::new(),
+        )?;
 
         // the actual restore
-        self.repo.restore(plan, &self.opts, ls, &dest)?;
+        self.repo
+            .restore(plan, &self.opts, ls, &dest, CancelToken::new())?;
         Ok(())
     }
 

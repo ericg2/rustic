@@ -13,7 +13,7 @@ use anyhow::{Result, anyhow, bail};
 use clap::Parser;
 use conflate::Merge;
 use dialoguer::Password;
-use rustic_backend::BackendOptions;
+use rustic_backend::{BackendBuilder, BackendOptions};
 use rustic_core::{
     CredentialOptions, Credentials, Grouped, IndexedFullStatus, IndexedIdsStatus, Open, OpenStatus,
     ProgressBars, Repository, RepositoryOptions, RusticResult, SnapshotGroupCriterion,

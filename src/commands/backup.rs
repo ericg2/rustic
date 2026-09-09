@@ -23,13 +23,13 @@ use comfy_table::Cell;
 use conflate::{Merge, MergeFrom};
 use derive_setters::Setters;
 use log::{debug, error, info, warn};
-use rustic_backend::local::{LocalSaveOptions, LocalSource};
+use rustic_backend::local::LocalSource;
 use rustic_backend::opendal::{OpenDALConfig, OpenDALSource};
 use rustic_backend::stdin::StdinSource;
 use rustic_backend::stdout::CommandSource;
 use rustic_core::{
-    BackupOptions, Excludes, FilterOptions, ReadSource, ReadSourceBuilder,
-    StringList,
+    BackendConfig, BackupOptions, CancelToken, ErrorKind, Excludes, FilterOptions, ListAdapter,
+    ReadSource, RusticError, SaveOptions, StringList,
 };
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -111,7 +111,7 @@ pub struct BackupCmd {
     /// Node save options
     #[clap(flatten, next_help_heading = "Node modification options")]
     #[serde(flatten)]
-    ignore_save_opts: LocalSaveOptions,
+    ignore_save_opts: SaveOptions,
 
     /// Parent processing options
     #[clap(flatten, next_help_heading = "Options for parent processing")]
@@ -202,7 +202,7 @@ pub struct BackupSourceOptions {
 
     #[serde(flatten)]
     /// Options how to save entries from a local source
-    pub ignore_save_opts: LocalSaveOptions,
+    pub ignore_save_opts: SaveOptions,
 
     #[serde(flatten)]
     /// excludes
@@ -414,49 +414,49 @@ impl BackupCmd {
                 && let Some(scheme) = source[0].to_string_lossy().strip_prefix("opendal:")
         {
             let config = OpenDALConfig::from_iter(scheme, options);
-            let source = OpenDALSource::new(&config, source);
-            Self::archive(repo, &(backup_opts.into()), ls, &source, snap)?;
+            let src = OpenDALSource::from_config(&config)?;
+            Self::archive(repo, &(backup_opts.into()), ls, &source, &src, snap)?;
         } else if source == backup_stdin {
             let path = PathBuf::from(&backup_opts.stdin_filename);
             if let Some(command) = &backup_opts.stdin_command {
                 let src = CommandSource::new(command, path);
-                Self::archive(repo, &(backup_opts.into()), ls, &src, snap)?;
+                Self::archive(repo, &(backup_opts.into()), ls, &source, &src, snap)?;
             } else {
                 let src = StdinSource::new(path);
-                Self::archive(repo, &(backup_opts.into()), ls, &src, snap)?;
+                Self::archive(repo, &(backup_opts.into()), ls, &source, &src, snap)?;
             }
         } else {
-            let src = LocalSource::new(&source)
-                .save_opts(backup_opts.ignore_save_opts.clone())
-                .excludes(backup_opts.excludes.clone())
-                .filter_opts(backup_opts.ignore_filter_opts.clone());
-
-            Self::archive(repo, &(backup_opts.into()), ls, &src, snap)?;
+            // TODO: find a way to backup multiple, real sources.
+            let src = LocalSource::new("/");
+            Self::archive(repo, &(backup_opts.into()), ls, &source, &src, snap)?;
         }
         Ok(())
     }
 
-    pub fn archive<R>(
+    pub fn archive(
         repo: &IndexedIdsRepo,
         opts: &BackupOptions,
         ls: bool,
-        src: &R,
+        source: &PathList,
+        src: &impl ReadSource,
         snap: &mut SnapshotFile,
-    ) -> Result<()>
-    where
-        R: ReadSourceBuilder + 'static,
-        <<R as ReadSourceBuilder>::Reader as ReadSource>::Iter: Send,
-        <<R as ReadSourceBuilder>::Reader as ReadSource>::Open: Send,
-    {
+    ) -> Result<()> {
         if ls {
             let lister = LsCmd {
                 long: true,
                 ..Default::default()
             };
-            lister.display(src.get_reader()?.entries().map(|e| Ok(e?.as_tree_entry())))?;
+            let iter = ListAdapter::new_multi(src, source.paths())?.map(|e| {
+                Ok(e.map_err(|err| {
+                    RusticError::with_source(ErrorKind::Backend, "Failed to read file", err)
+                })?
+                .into_tree())
+            });
+            lister.display(iter)?;
         } else {
             let snapshot = std::mem::take(snap);
-            let snapshot = repo.backup(opts, src, snapshot)?;
+            let snapshot =
+                repo.backup_with(opts, src, snapshot, source.clone(), CancelToken::new())?;
             *snap = snapshot;
         }
         Ok(())

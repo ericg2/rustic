@@ -15,12 +15,8 @@ use abscissa_core::{Command, Runnable, Shutdown};
 use anyhow::Result;
 
 use derive_more::Add;
-use rustic_backend::local::{LocalSaveOptions, LocalSource};
-use rustic_core::{
-    Excludes, FilterOptions, LsOptions, ProgressType, ReadSource, ReadSourceBuilder,
-    ReadSourceEntry, RusticResult,
-    repofile::{Node, NodeType},
-};
+use rustic_backend::local::LocalSource;
+use rustic_core::{repofile::{Node, NodeType}, Excludes, FilterOptions, ListAdapter, ListOptions, LsOptions, ProgressType, ReadSource, RusticError, RusticResult, ErrorKind};
 
 mod constants {
     // constants from man page inode(7)
@@ -219,17 +215,21 @@ impl LsCmd {
             anyhow::bail!("interactive ls with local path is not yet implemented!");
         }
         let path = path.unwrap_or(".");
-        let src = LocalSource::new(path)
-            .excludes(self.excludes.clone())
-            .filter_opts(self.ignore_opts.clone())
-            .save_opts(LocalSaveOptions::default())
-            .get_reader()?
-            .entries()
-            .map(|item| -> RusticResult<_> {
-                let ReadSourceEntry { path, node, .. } = item?;
-                Ok((path, node))
-            });
-        self.display(src)?;
+        let src = LocalSource::new(path);
+        let iter = ListAdapter::with_options(
+            &src,
+            "/",
+            ListOptions::default()
+                .excludes(self.excludes.clone())
+                .filters(self.ignore_opts.clone()),
+        )?
+        .map(|item| {
+            let item = item.map_err(|err| {
+                RusticError::with_source(ErrorKind::Backend, "Failed to read file", err)
+            })?;
+            Ok(item.into_tree())
+        });
+        self.display(iter)?;
         Ok(())
     }
 
